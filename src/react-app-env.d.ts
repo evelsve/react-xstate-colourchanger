@@ -6,8 +6,11 @@ interface SDSContext {
     recResult: string;
     nluData: any;
     ttsAgenda: string;
-    query: string;
-    snippet: string
+    person: string,
+    day: string,
+    time: string,
+    approval:  boolean,
+    error: boolean,
 }
 
 type SDSEvent =
@@ -16,4 +19,5 @@ type SDSEvent =
     | { type: 'ASRRESULT', value: string }
     | { type: 'ENDSPEECH' }
     | { type: 'LISTEN' }
+    | { type: 'RETRY' }
     | { type: 'SPEAK', value: string };
