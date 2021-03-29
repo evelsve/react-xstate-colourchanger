@@ -1,17 +1,11 @@
-import { MachineConfig, send, Action, assign } from "xstate";
-import { mapContext } from "xstate/lib/utils";
+import { MachineConfig, send, assign } from "xstate";
+import {say, listen, Endings, misUnderstood} from "./index";
+// import { SimulatedClock } from 'xstate/lib/SimulatedClock'; // >= 4.6.0
 
 
-function say(text: string): Action<SDSContext, SDSEvent> {
-    return send((_context: SDSContext) => ({ type: "SPEAK", value: text }))
-}
+// GRAMMAR
 
-function listen(): Action<SDSContext, SDSEvent> {
-    return send('LISTEN')
-}
-
-const grammar: { 
-    [index: string]: {
+const grammar: { [index: string]: {
         appointment?: string,
         to_do?: string,
         timer?: string,
@@ -19,9 +13,8 @@ const grammar: {
         day?: string,
         time?: string,
         approval?:  boolean,
-    }
-         } = 
-         {
+    }} =  {
+            // ___________________________________________
             "hairdresser": { person: "hairdresser" },
             "doctor": { person: "doctor" },
             "dentist": { person: "dentist" },
@@ -35,6 +28,7 @@ const grammar: {
             "Jane": { person: "Jane Mayer" },
             "Anna": { person: "Anna Pana" },
             "Lora": { person: "Lora Cat" },
+            // ___________________________________________
             "on Monday": { day: "Monday" },
             "on Tuesday": { day: "Tuesday" },
             "on Wednesday": { day: "Wednesday" },
@@ -49,6 +43,7 @@ const grammar: {
             "on Friday next week": { day: "Friday next week" },
             "on Saturday next week": { day: "Saturday next week" },
             "on Sunday next week": { day: "Sunday next week" },
+            // ___________________________________________
             "8": { time: "eight" },
             "9": { time: "nine" },
             "10": { time: "ten" },
@@ -87,6 +82,7 @@ const grammar: {
             "5 30": { time: "half past five" },
             "6 30": { time: "half past six" },
             "7 30": { time: "half past seven" },
+            // ___________________________________________
             "of course": { approval: true },
             "yes": { approval: true },
             "yeah": { approval: true },
@@ -94,56 +90,45 @@ const grammar: {
             "sure": { approval: true },
             "no": { approval: false },
             "nah": { approval: false },
-            "nope": { approval: false },
-         }
+            "nope": { approval: false }}
+
+            
 
 
 export const dmMachine1: MachineConfig<SDSContext, any, SDSEvent> = ({
     initial: 'idle',
     states: {
+        // ...
         idle: {},
-        welcome: {
-            initial: "prompt",
-            on: { ENDSPEECH: "who" },
-            states: {
-                prompt: { entry: say("Let's create an appointment") }
-            }
-        },
+        // ...
         who: {
             initial: "prompt",
             on: {
-                RECOGNISED: [{
-                    cond: (context) => "person" in (grammar[context.recResult] || {}),
+                RECOGNISED: [
+                    {cond: (context) => "person" in (grammar[context.recResult] || {}),
                     actions: assign((context) => { return { person: grammar[context.recResult].person } }),
-                    target: "day"
-                },
-                { target: ".nomatch" }]
+                    target: "day"},
+
+                    {cond: (context) => context.recResult === "help"},
+
+                    { target: ".nomatch" }],
             },
-            states: {
-                prompt: {
-                    entry: say("Ok. Who are you meeting with?"),
-                    on: { ENDSPEECH: "ask" }
-                },
-                ask: {
-                    entry: listen()
-                },
-                nomatch: {
-                    entry: say("Sorry, I don't know them"),
-                    on: { ENDSPEECH: "prompt" }
-                }
-            }
+            ...misUnderstood(`Who are you meeting with?`,  ["#root.dm1.idle", "#root.init.help"])
         },
+        // ...
         day: {
             initial: "prompt",
             on: {
                 RECOGNISED: [
-                    {
-                        cond: (context) => "day" in (grammar[context.recResult] || {}),
-                        actions: assign((context) => { return { day: grammar[context.recResult].day } }),
-                        target: "approval"
+                    {cond: (context) => "day" in (grammar[context.recResult] || {}),
+                    actions: assign((context) => { return { day: grammar[context.recResult].day } }),
+                    target: "approval" },
+
+                    {cond: (context) => context.recResult === "help", target: ".help" },
+
+                    { target: ".nomatch" } ]
+                
                 },
-                { target: ".nomatch" }]
-            },
             states: {
                 prompt: {
                     entry: send((context) => ({
@@ -159,87 +144,87 @@ export const dmMachine1: MachineConfig<SDSContext, any, SDSEvent> = ({
                     entry: say("Sorry, I do not understand"),
                     on: { ENDSPEECH: "prompt" }
                 },
-            }
+                help: {
+                    entry: say("We may be miscommunicating. Let's take a step back"),
+                    on: { ENDSPEECH: "#root.dm1.who" }
+                }
+            },
+            // ...misUnderstood(`OK. ${context.person} it is. On which day is your meeting?`, "#root.dm1.who", ''),
+            // Note: still can't understand why misUnderstood2 function does not work on prompts with context.
         },
+        // ...
         approval: {
             initial: "prompt",
             on: {
                 RECOGNISED: [
-                    {
-                        cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
-                        actions: assign((context) => { return { approval: true } }),
-                        target: "summary_whole"
-                    },
-                    {
-                        cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
-                        actions: assign((context) => { return { approval: false} }),
-                        target: "time"
-                    },
+                    {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
+                    actions: assign((context) => { return { approval: true } }),
+                    target: "summary_whole"},
+
+                    {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
+                    actions: assign((context) => { return { approval: false} }),
+                    target: "time"},
+
+                    {cond: (context) => context.recResult === "help", target: ".help" },
+
                     { target: ".nomatch" }
                 ]
-            },
+                },
+                // ...misUnderstood(`Ok, meeting on ${context.day}. Will it take the whole day?`, "#root.dm1.day")},
             states: {
                 prompt: {
                     entry: send((context) => ({
                         type: "SPEAK",
-                        value: `Great. ${context.day}. Will it take the whole day?`
+                        value: `Ok, meeting on ${context.day}. Will it take the whole day?`
                     })),
                     on: { ENDSPEECH: "ask" }
                 },
                 ask: {
-                    entry: listen()
+                    entry: listen()   
                 },
                 nomatch: {
                     entry: say("Sorry, I do not understand"),
                     on: { ENDSPEECH: "prompt" }
                 },
+                help: {
+                    entry: say("We may be miscommunicating. Let's take a step back"),
+                    on: { ENDSPEECH: "#root.dm1.day" }
+                }
             }
         },
+        // ...
         time: {
             initial: "prompt",
             on: {
                 RECOGNISED: [
-                    {
-                        cond: (context) => "time" in (grammar[context.recResult] || {}),
-                        actions: assign((context) => { return { time: grammar[context.recResult].time } }),
-                        target: "summary_time"
-                    },
-                { target: ".nomatch" }]
+                    {cond: (context) => "time" in (grammar[context.recResult] || {}),
+                    actions: assign((context) => { return { time: grammar[context.recResult].time } }),
+                    target: "summary_time"},
+
+                    {cond: (context) => context.recResult === "help",
+                    target: ".help" },
+
+                    { target: ".nomatch" }]
             },
-            states: {
-                prompt: {
-                    entry: send((context) => ({
-                        type: "SPEAK",
-                        value: `What time is your meeting?`
-                    })),
-                    on: { ENDSPEECH: "ask" }
-                },
-                ask: {
-                    entry: listen()
-                },
-                nomatch: {
-                    entry: say("Sorry, I do not understand"),
-                    on: { ENDSPEECH: "prompt" }
-                },
-            }
-        },
+        ...misUnderstood(`What time is your meeting?`, "#root.dm1.approval")},
+        // ...
         summary_time: {
             initial: "prompt",
             on: {
                 RECOGNISED: [
-                    {
-                        cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
-                        actions: assign((context) => { return { approval: true } }),
-                        target: "created"
-                    },
-                    {
-                        cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
-                        actions: assign((context) => { return { approval: false } }),
-                        target: "who"
-                    },
-                { target: ".nomatch" }
-            ]
-            },
+                    {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
+                    actions: assign((context) => { return { approval: true } }),
+                    target: "created"},
+
+                    {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
+                    actions: assign((context) => { return { approval: false } }),
+                    target: "who"},
+
+                    {cond: (context) => context.recResult === "help",
+                    target: ".help" },
+
+                    { target: ".nomatch" }]
+                },
             states: {
                 prompt: {
                     entry: send((context) => ({
@@ -255,31 +240,35 @@ export const dmMachine1: MachineConfig<SDSContext, any, SDSEvent> = ({
                     entry: say("Sorry, I do not understand"),
                     on: { ENDSPEECH: "prompt" }
                 },
+                help: {
+                    entry: say("We may be miscommunicating. Let's take a step back"),
+                    on: { ENDSPEECH: "#root.dm1.approval" }
+                }
             }
         },
+        // ...
         summary_whole: {
             initial: "prompt",
             on: {
                 RECOGNISED: [
-                    {
-                        cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
-                        actions: assign((context) => { return { approval: true } }),
-                        target: "created"
-                    },
-                    {
-                        cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
-                        actions: assign((context) => { return { approval: false } }),
-                        target: "who"
-                    },
-                { target: ".nomatch" }
-            ]
-            },
+                    {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
+                    actions: assign((context) => { return { approval: true } }),
+                    target: "created"},
+
+                    {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
+                    actions: assign((context) => { return { approval: false } }),
+                    target: "who"},
+
+                    {cond: (context) => context.recResult === "help",
+                    target: ".help" },
+
+                    { target: ".nomatch" }]
+                },
             states: {
                 prompt: {
                     entry: send((context) => ({
                         type: "SPEAK",
-                        value: `Do you want me to create an appointment with ${context.person} on ${context.day} for the whole day?`
-                    })),
+                        value: `Do you want me to create an appointment with ${context.person} on ${context.day} for the whole day?`})),
                     on: { ENDSPEECH: "ask" }
                 },
                 ask: {
@@ -289,20 +278,282 @@ export const dmMachine1: MachineConfig<SDSContext, any, SDSEvent> = ({
                     entry: say("Sorry, I do not understand"),
                     on: { ENDSPEECH: "prompt" }
                 },
+                help: {
+                    entry: say("We may be miscommunicating. Let's take a step back"),
+                    on: { ENDSPEECH: "#root.dm1.approval" }
+                }
             }    
         },
-        created: {
-            initial: "prompt",
-            states: {
-                idle: {},
-                prompt: {
-                    entry: send((context) => ({
-                        type: "SPEAK",
-                        value: `Your appoinment has been created. Have a nice day!`
-                    })),
-                     on: { ENDSPEECH: "idle" }
-                    },
-                }    
-            },
-    }   
+        created: {...Endings("Your appoinment has been created","#root.init.goodbye"), 
+        // always: "idle"
+        }
+    }
 })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ONLY DRAFTS
+
+
+
+
+// done: {...Endings("Congratulations on your accomplishment!","#root.init")},
+
+          // annoy:{
+            //     initial: "prompt",
+            //     on: {
+            //         RECOGNISED: [
+            //             {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
+            //             target: "done"},
+
+            //             {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
+            //             target: ".wait"}],
+                    
+            //         // WAIT: '.wait'
+
+            //         }
+            //     },
+
+             // ...
+            // annoy: {
+            //     initial: "prompt",
+            //     on: {
+            //         RECOGNISED: [
+            //             {cond: (context) => context.option === 'agrreement', target: "done"},
+
+            //             {cond: (context) => context.option === 'disagreement', target: ".wait"},
+                        
+            //             {target: ".wait"}], 
+
+            //         WAIT: '.prompt'
+            //     },
+            //     states: {
+            //         prompt: {
+            //             entry: say("Have you done your task yet?"),
+            //             on: { ENDSPEECH: "ask" }
+            //         },
+            //         ask: {
+            //             entry: [ send('LISTEN'), send('WAIT', {delay: 5000})]
+            //         },
+            //         // wait2: {entry: [ send('WAIT', {delay: 3000})]},
+            //         wait: {
+            //             entry: [
+            //                 say('Hm.')
+            //             ],
+            //             on: {
+            //                 ENDSPEECH: [
+            //                     {cond: () => (num++) <= 2, target: 'prompt'},
+            //                     {target: '#root.dm1.done'}
+            //                 ]
+            //             }
+            //         }
+            //     }
+            // },
+
+
+            // ----
+
+            // quest1: {
+                //     on: {
+                //         RECOGNISED: [
+                //                 {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
+                //                 actions: assign((context) => { return { approval: true } }),
+                //                 target: "#root.dm1.create_do"},
+            
+                //                 {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
+                //                 actions: assign((context) => { return { approval: false} }),
+                //                 target: "#root.dm1.if_ideas"},
+
+                //                 {target: "#root.dm1.done.others"}
+
+                //                 // {cond: (context) => context.option === 'help', target: '.help'}
+                //                 ]
+                //         },
+                //         ...promptHelpBye("I suppose you could do something productive. Do you agree?")
+                //         },\
+
+
+
+                // ------
+
+                // done: {
+                //     initial: "prompt",
+                //     // on: {ENDSPEECH: ['#root.dm1.idle']},
+                //         states: {
+                //             prompt: {
+                //                 entry: say("Congratulations on your accomplishment! Here's a reward"),
+                //                 on: { ENDSPEECH: ['#root.dm1.idle', '#root.init.help.goodbye']}
+                //         }, 
+                //             others: {
+                //                 entry: say("Ummm, you said something strange"),
+                //                 on: { ENDSPEECH: '#root.dm1.positive.quest2'}
+                //                 }
+                //         }
+                //     }   
+
+
+                // ------
+
+
+                // idea: {
+                //     initial: "prompt",
+                //     // on: {ENDSPEECH: ['#root.dm1.idle']},
+                //         states: {
+                //             prompt: {
+                //                 entry: send((context) => ({
+                //                     type: "SPEAK",
+                //                     value:`You should work on your idea of ${context.idea}. Say 'finished', when you're done` })),
+                //                 on: { ENDSPEECH: ['#root.dm1.idea_wait']}
+                //             // },
+                //     //         elevator: {
+                //     //             entry: send(openInNewTab('https://www.youtube.com/watch?v=VBlFHuCzPgY&t=3s&ab_channel=AntoineB')),
+                //     //             on: { ENDSPEECH: '#root.dm1.idea_wait'}
+                //                 }
+                //     }
+                // }
+
+                // ------
+
+            // annoy: {
+            //     initial: "prompt",
+            //     on: {
+            //         RECOGNISED: {
+            //             target: "conditional3",
+            //             actions: assign((context) => { return { option: context.recResult } }),
+            //         },
+            //         WAIT: 'wait'
+            //     },
+            //     states: {
+            //         prompt: {
+            //             entry: say("Let me know when you're done."),
+            //             on: { ENDSPEECH: "ask" }
+            //         },
+            //         ask: {
+            //             entry: [
+            //                 send('LISTEN'),
+            //                 send('WAIT', {delay: 10000})
+            //             ]
+            //         }
+            //     }
+            // },
+            // ...
+            // wait: {
+                
+            //     entry: [say('Have you done your task yet?')],
+            //     on: {
+            //         ENDSPEECH: [
+            //             {cond: () => (num++, 1) <= 5, target: 'conditional3'},
+            //             {target: '#root.dm1.idea_wait'}
+            //         ]
+            //     }
+            // },
+            // conditional3: {...Conditional('agreement', "#root.dm1.done", 'disagreement', "#root.dm1.annoy", "#root.dm1.annoy", '#root.dm1.idle', `Mhm.`)},
+
+
+            // -----
+
+                // ...
+                // full_annoy:{
+                //     initial: 'annoy',
+                //     on: { 
+                //         // RECOGNISED: {
+                //         //         cond: (context) => help_commands.includes(context.recResult),
+                //         //         target: '#root.init.help'
+                //         //             },
+    
+                //         MAXSPEECH: [
+                //             { 
+                //                 cond: (context) => context.count < 5,
+                //                 target: '#root.dm1.idea_wait'},
+    
+                //                 {cond: (context) => context.count == null,
+                //                 actions: assign((context)=>{return {count: Number(0)}}),
+                //                 target: '#root.dm1.maxspeech'}],
+                //             },
+                //     states:{
+                //         hist:{type: 'history'},
+                //         // .... // ...
+                //         annoy: {
+                //             on: {
+                //                 RECOGNISED: [{
+                //                     cond: (context) => "finished" in (gram[context.recResult] || {}),
+                //                     actions: assign((context) => { return { finished: gram[context.recResult].finished } }),
+                //                     target: "#root.dm1.done"}]
+        
+                //                 // },
+                //                 // { cond: (context) => !(help_commands.includes(context.recResult)),
+                //                 //     target: ".nomatch" }]
+                //             },
+                //             ...Prompt_Nomatch_Timeout('Have you done your task yet?', "Sorry I don't understand"),
+                //         }
+                // },
+                // // ....
+                // },
+                // // ... 
+                // maxspeech:{
+                //     initial: 'prompt',
+                //     on: {
+                //         ENDSPEECH: {
+                //             actions: assign((context)=> {return {count: context.count+1 }}),
+                //             target: 'full_annoy.hist'
+                //                 }
+                //             },
+                //             // target: 'fill_appointment_info.hist'
+                //         states: {
+                //             prompt: {entry: say('I AM A STUPID BOT ')}
+                //     }
+                // },
+
+                // ...
+
+                            // ..
+        //     wait: {
+        //         initial: 'prompt',
+        //         on: { ENDSPEECH: '#root.dm1.annoy'},
+        //         states: {
+        //             prompt: {
+        //                 entry: say("M."),
+        //                 // on: { ENDSPEECH: "#root.dm1.annoy" }
+        //             },
+        //             // ask: {
+        //             //     entry: [
+        //             //         send('LISTEN'),
+        //             //         send('WAIT', {delay: 10000})
+        //             //     ]}
+        //             }
+        // },
+        //     // ...
+        //     annoy: {
+        //         initial: "prompt",
+        //         on: {
+        //             RECOGNISED: {
+        //                 target: "conditional3",
+        //                 actions: assign((context) => { return { option: context.recResult } }),
+        //             },
+        //             WAIT: 'wait'
+        //         },
+        //         states: {
+        //             prompt: {
+        //                 entry: say("Have you finished your task?"),
+        //                 on: { ENDSPEECH: "ask" }
+        //             },
+        //             ask: {
+        //                 entry: [
+        //                     send('LISTEN'),
+        //                     send('WAIT', {delay: 10000})
+        //                 ]
+        //             }
+        //         }
+        //     },
+            // conditional3: {...Conditional('agreement', "#root.dm1.done", 'disagreement', "#root.dm1.wait", "#root.dm1.annoy", '#root.dm1.idle', `Oh`)},

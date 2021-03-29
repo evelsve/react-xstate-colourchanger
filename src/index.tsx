@@ -1,12 +1,15 @@
 import "./styles.scss";
 import * as React from "react";
 import * as ReactDOM from "react-dom";
-import { Machine, assign, send, Action, State } from "xstate";
+import { MachineConfig, Machine, send, Action, assign, State } from "xstate";
 import { useMachine, asEffect } from "@xstate/react";
+import { useSpeechSynthesis, useSpeechRecognition } from 'react-speech-kit';
 import { inspect } from "@xstate/inspect";
+// Welcome to the machines
 import { dmMachine1 } from "./dmAppointment";
 import { dmMachine2 } from "./dmTimer";
 import { dmMachine3 } from "./dmToDo";
+import { dmMachine4 } from "./dmSmartHome";
 
 
 inspect({
@@ -14,73 +17,195 @@ inspect({
     iframe: false
 });
 
-import { useSpeechSynthesis, useSpeechRecognition } from 'react-speech-kit';
 
-function say(text: string): Action<SDSContext, SDSEvent> {
+export function say(text: string): Action<SDSContext, SDSEvent> {
     return send((_context: SDSContext) => ({ type: "SPEAK", value: text }))
 }
 
-function listen(): Action<SDSContext, SDSEvent> {
+export function listen(): Action<SDSContext, SDSEvent> {
     return send('LISTEN')
 }
+
+
+export function promptAndAsk(prompt: string): MachineConfig<SDSContext, any, SDSEvent> {
+    return ({
+        initial: 'prompt',
+        states: {
+            prompt: {
+                entry: say(prompt),
+                on: { ENDSPEECH: 'ask' }
+            },
+            ask: {entry: send('LISTEN')}}
+    })
+}
+
+export function misUnderstood(saythis: any, on_help: any): MachineConfig<SDSContext, any, SDSEvent> {
+    return ({
+        initial: 'prompt',
+        states: {
+        prompt: {
+            entry: say(saythis),
+            on: { ENDSPEECH: "ask" }
+        },
+        ask: { 
+            entry: listen()
+        },
+        nomatch: {
+            entry: say("Sorry, I do not understand."),
+            on: { ENDSPEECH: "prompt" }
+        },
+        help: {
+            entry: say("We may be miscommunicating. Let's take a step back"),
+            on: { ENDSPEECH: on_help }
+        }
+}})}
+
+
+export function misUnderstood2(saythis: any, on_help: any, _context: any): MachineConfig<SDSContext, any, SDSEvent> {
+    return ({
+        initial: 'prompt',
+        states: {
+        prompt: {
+            entry: send((_context) => ({type: "SPEAK", value: saythis})),
+            on: { ENDSPEECH: "ask" }
+        },
+        ask: { 
+            entry: listen()
+        },
+        nomatch: {
+            entry: say("Sorry, I do not understand."),
+            on: { ENDSPEECH: "prompt" }
+        },
+        help: {
+            entry: say("We may be miscommunicating. Let's take a step back"),
+            on: { ENDSPEECH: on_help }
+        }
+}})}
+
+export function Endings(saythis: string, on_end:string): MachineConfig<SDSContext, any, SDSEvent> {
+    return ({        
+        initial: "prompt",
+        states: {
+            idle: {},
+            prompt: {
+                entry: say(saythis),
+                on: { ENDSPEECH: on_end }}
+            }    
+        })}
+
+const saySnippet: Action<SDSContext, SDSEvent> = send((context: SDSContext) => ({
+    type: "SPEAK", value: `${context.snippet}`
+}))
+
+//  GRAMMAR
+
+const grammar: { [index: string]: {approval?:  boolean } } = 
+{  "of course": { approval: true },
+    "yes": { approval: true },
+    "yeah": { approval: true },
+    "yup": { approval: true },
+    "sure": { approval: true },
+    "no": { approval: false },
+    "nah": { approval: false },
+    "nope": { approval: false }}
+
+
+
+//  MAIN MACHINE
 
 const machine = Machine<SDSContext, any, SDSEvent>({
     id: 'root',
     type: 'parallel',
     states: {
-        initial_welcome: {
+        // ____________
+        init: {
             initial: 'idle',
             states: {
-                idle: {
+                // ...
+                idle: {on: {CLICK: 'welcome'}},
+                // ...
+                welcome: {
                     on: {
-                        CLICK: 'prompt'
+                        RECOGNISED: {
+                            target: "query",
+                            actions: assign((context) => { return { option: context.recResult } }),
+                        }},
+                    ...promptAndAsk("What do you want to do?")
+                },
+                // ...
+                query: {
+                    invoke: {
+                        id: 'rasa',
+                        src: (context, _event) => nluRequest(context.option),
+                        onDone: {
+                            actions: [assign((_context, event) => { return  {option: event.data.intent.name} }), 
+                            (_context: SDSContext, event: any) => console.log(event.data)],
+                            target: "distributor"
+                        },
+                        onError: {
+                            target: 'welcome',
+                            actions: (_context, event) => console.log(event.data)}
                     }
                 },
-                prompt: {
-                    entry: send((context) => ({
-                        type: "SPEAK",
-                        value: `What do you want to do?`
-                    })),
-                    on: { ENDSPEECH: "ask" }
+                // ...
+                distributor: {
+                    initial: "prompt",
+                    on: {
+                        ENDSPEECH: [
+                            {cond: (context) => context.option === 'todo_on'|| context.option === 'todo_off', target: ["#root.dm3.denial", "idle"] },
+                            {cond: (context) => context.option === 'timer_on' || context.option === 'timer_off', target: ["#root.dm2.timer", "idle"] },
+                            {cond: (context) => context.option === 'appointment_on', target: ["#root.dm1.who", "idle"]},
+                            {cond: (context) => context.option === 'smart_on', target: ["#root.dm4.welcome", "idle"]},
+                            {cond: (context) => context.option === 'help_on', target: "help"},
+                            {cond: (context) => context.option === 'appointment_off', target: "other"}]
+                        },
+                    states: {
+                        prompt: {
+                            entry: send((_context) => ({type: "SPEAK", value: `Understood.`})),
+                        }
+                    }
                 },
-                ask: {
-                    entry: listen(),
+                // ...
+                help: {
                     on: {
                         RECOGNISED: [
-                            {
-                                cond: (context) => context.recResult.includes('appointment'),
-                                target: ["#root.dm1.who", "idle"]
-                            },
-                            {
-                                cond: (context) => context.recResult.includes('to-do') || context.recResult.includes('to do'),
-                                target: ["#root.dm3.denial", "idle"]
-                            },
-                            {
-                                cond: (context) => context.recResult.includes('timer'),
-                                target: ["#root.dm2.denial", "idle"]
-                            },
-                            { target: "nomatch" }
-                        ],
+                            {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === true,
+                            actions: assign((_context) => { return { approval: true } }),
+                            target: "welcome"},
+
+                            {cond: (context) => grammar[context.recResult] !== undefined && grammar[context.recResult].approval === false,
+                            actions: assign((_context) => { return { approval: false} }),
+                            target: "goodbye"},]  
                     },
+                ...promptAndAsk("Would you like to start over?")
                 },
-                nomatch: {
-                    entry: say("Sorry, I do not understand"),
-                    on: { ENDSPEECH: "prompt" }
-                }
-            }
-        },
+                // ...
+                other: {...Endings("This function has not been developed", "#root.init.help")
+                },
+                // ...
+                goodbye: {...Endings("Thank you for using Bot Chatbotterson. Goodbye.","#root.init")}
+            },
+        },            
+        // ____________
         dm1: {
         ...dmMachine1
         },
+        // ____________
         dm2: {
         ...dmMachine2
         },
+        // ____________
         dm3: {
         ...dmMachine3
+        },
+        // ____________
+        dm4: {
+        ...dmMachine4
         },
         asrtts: {
             initial: 'idle',
             states: {
+                // ...
                 idle: {
                     on: {
                         LISTEN: 'recognising',
@@ -90,6 +215,7 @@ const machine = Machine<SDSContext, any, SDSEvent>({
                         }
                     }
                 },
+                // ...
                 recognising: {
 		            initial: 'progress',
                     entry: 'recStart',
@@ -110,6 +236,7 @@ const machine = Machine<SDSContext, any, SDSEvent>({
                         },
                     }
                 },
+                // ...
                 speaking: {
                     entry: 'ttsStart',
                     on: {
@@ -117,8 +244,8 @@ const machine = Machine<SDSContext, any, SDSEvent>({
                     }
                 }
             }    
-        },
-    },
+        }
+    }
 },
     {
         actions: {
@@ -133,7 +260,7 @@ const machine = Machine<SDSContext, any, SDSEvent>({
                 /* context.nluData = event.data */
                 console.log('<< NLU intent: ' + context.nluData.intent.name)
             }
-        },
+        }
     });
 
 
@@ -192,10 +319,6 @@ function App() {
                 console.log('Recognition stopped.');
                 stop()
             }),
-            // changeColour: asEffect((context) => {
-            //     console.log('Thinking...');
-            //     document.body.style.background = context.recResult;
-            // }),
             ttsStart: asEffect((context, effect) => {
                 console.log('Speaking...');
                 speak({ text: context.ttsAgenda })
@@ -204,10 +327,6 @@ function App() {
                 console.log('TTS STOP...');
                 cancel()
             }),
-            // speak: asEffect((context) => {
-	        //       console.log('Speaking...');
-            //       speak({text: context.ttsAgenda })
-            // }),
         },
     });
 
@@ -220,15 +339,14 @@ function App() {
 };
 
 
-
 /* RASA API
  *  */
 const proxyurl = "https://cors-anywhere.herokuapp.com/";
-const rasaurl = 'https://dashboard.heroku.com/apps/app-lab-2'
-const nluRequest = (text: string) =>
+const rasaurl = 'https://ap-ti-do.herokuapp.com/model/parse'
+export const nluRequest = (text: string) =>
     fetch(new Request(proxyurl + rasaurl, {
         method: 'POST',
-        headers: { 'Origin': 'http://maraev.me' }, // only required with proxy
+        headers: { 'Origin': 'http://localhost:3000/' },
         body: `{"text": "${text}"}`
     }))
         .then(data => data.json());
@@ -237,3 +355,5 @@ const rootElement = document.getElementById("root");
 ReactDOM.render(
     <App />,
     rootElement);
+
+
